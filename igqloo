@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""A small command-line tool for easily writing GQL queries.
+"""
+import re
+import requests
+from argparse import ArgumentParser
+
+
+class Node(object):
+
+    def __init__(self, name=None, root=True):
+        self.name = name
+        self.root = root
+        self.fields = set()
+        self.filters = {}
+        self.children = {}
+
+    def __getitem__(self, name):
+        node = self
+        for segment in name.split('.'):
+            if segment not in node.children:
+                node.children[segment] = Node(name=segment, root=False)
+            node = node.children[segment]
+
+        return node
+
+    def __setitem__(self, name, value):
+        self[name].fields.update(value)
+
+    def __str__(self):
+        query = []
+
+        if self.root:
+            query.append('query')
+        else:
+            query.append(str(self.name))
+
+        if self.filters:
+            query.append('(')
+            for k,v in self.filters.items():
+                query.append('{k}:"{v}"'.format(k=k, v=v))
+            query.append(')')
+
+        query.append('{')
+        query.append(','.join(self.fields))
+        if self.children:
+            if self.fields:
+                query.append(',')
+            for f in self.children.values():
+                query.append(str(f))
+
+        query.append('}')
+
+        return ''.join(query)
+
+    def add_fields(self, *fields):
+        self.fields.update(fields)
+
+    def add_filters(self, **kwargs):
+        self.filters.update(kwargs)
+
+
+def make_request(uri, query):
+    resp = requests.get(uri, params={'query': query})
+    return resp
+
+
+if __name__ == '__main__':
+    parser = ArgumentParser(
+            description='Interact with a GQL query.')
+    parser.add_argument(
+            'url',
+            help='URL of GraphQL interface')
+    parser.add_argument(
+            'fields',
+            nargs='+',
+            help='Fields to request')
+
+    args = parser.parse_args()
+
+    q = Node(root=True)
+
+    for f in args.fields:
+        if '=' in f:
+            path, value = f.split('=')
+            filter_path, filter_key = path.rsplit('.', 1)
+            q[filter_path].add_filters(**{filter_key: value})
+        else:
+            path, fields = f.rsplit('.', 1)
+            fields = fields.split(',')
+            q[path].add_fields(*fields)
+
+    resp = make_request(args.url, q)
+
+    print(resp.text)
