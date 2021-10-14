@@ -3,19 +3,24 @@
 """
 import re
 import requests
+import sys
 from argparse import ArgumentParser
 
 
 class Node(object):
-
-    def __init__(self, name=None, root=True):
+    """Represents a node in a GraphQL query tree
+    """
+    def __init__(self, name=None, alias=None, root=True):
         self.name = name
+        self.alias = alias
         self.root = root
-        self.fields = set()
         self.filters = {}
         self.children = {}
 
     def __getitem__(self, name):
+        """Finds a node in the tree based on the path. Side effect: if a node
+        isn't found in the path, it will be created.
+        """
         node = self
         for segment in name.split('.'):
             if segment not in node.children:
@@ -28,11 +33,18 @@ class Node(object):
         self[name].fields.update(value)
 
     def __str__(self):
+        """Returns a query string from this node and its children
+        """
         query = []
 
         if self.root:
             query.append('query')
-        else:
+
+        if self.alias is not None:
+            query.append(self.alias + ':')
+
+        # TODO: Support named queries
+        if self.name is not None:
             query.append(str(self.name))
 
         if self.filters:
@@ -41,36 +53,85 @@ class Node(object):
                 query.append('{k}:"{v}"'.format(k=k, v=v))
             query.append(')')
 
-        query.append('{')
-        query.append(','.join(self.fields))
         if self.children:
-            if self.fields:
-                query.append(',')
-            for f in self.children.values():
-                query.append(str(f))
+            query.append('{')
+            if self.children:
+                for idx, f in enumerate(self.children.values()):
+                    query.append(str(f))
+                    if idx < len(self.children) - 1:
+                        query.append(',')
 
-        query.append('}')
+            query.append('}')
 
         return ''.join(query)
-
-    def add_fields(self, *fields):
-        self.fields.update(fields)
 
     def add_filters(self, **kwargs):
         self.filters.update(kwargs)
 
 
-def make_request(uri, query):
-    resp = requests.get(uri, params={'query': query})
-    return resp
+def parse_fields(q, fields):
+    """Parse out a list of fields, adding them to the query.
+
+    Split on '.', then ',', then '()'
+    """
+    for f in fields:
+        current_node = q
+        last_idx = 0
+        quoted = False
+        segment_chunks = []
+
+        for idx, c in enumerate(f):
+            if idx == len(f) - 1:
+                segment_chunks.append(f[last_idx:])
+            elif c in {',', '.', '('} and not quoted:
+                if idx > last_idx + 1:
+                    segment_chunks.append(f[last_idx:idx])
+                last_idx = idx
+            elif c in {')'} and idx > last_idx + 1:
+                segment_chunks.append(f[last_idx:idx + 1])
+                last_idx = idx
+
+            if c == '(' and not quoted:
+                quoted = True
+            elif c == ')' and quoted:
+                quoted = False
+
+            if c == '.' and not quoted or idx == len(f) - 1:
+                print(segment_chunks)
+
+                parent_node = current_node
+                for chunk in segment_chunks:
+                    if chunk[0] == '.':
+                        current_node = current_node[chunk[1:]]
+                    elif chunk[0] == ',':
+                        print(f'adding {chunk[1:]}')
+                        current_node = parent_node[chunk[1:]]
+                    elif chunk[0] == '(':
+                        chunk = chunk[1:-1]
+                        if ' as ' in chunk.lower():
+                            split = chunk.lower().index(' as ')
+                            name = chunk[:split]
+                            alias = chunk[split+4:]
+                            current_node = current_node[name]
+                            current_node.alias = alias
+                        else:
+                            k,v = chunk.split(':', 1)
+                            current_node.add_filters(**{k:v})
+
+                segment_chunks = []
+
+    return q
 
 
 if __name__ == '__main__':
     parser = ArgumentParser(
             description='Interact with a GQL query.')
     parser.add_argument(
-            'url',
-            help='URL of GraphQL interface')
+            '-v', '--verbose', action='store_true',
+            help='Enable verbose output')
+    parser.add_argument(
+            'uri',
+            help='URI of GraphQL interface')
     parser.add_argument(
             'fields',
             nargs='+',
@@ -79,17 +140,14 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     q = Node(root=True)
+    q = parse_fields(q, args.fields)
+    print(q)
 
-    for f in args.fields:
-        if '=' in f:
-            path, value = f.split('=')
-            filter_path, filter_key = path.rsplit('.', 1)
-            q[filter_path].add_filters(**{filter_key: value})
-        else:
-            path, fields = f.rsplit('.', 1)
-            fields = fields.split(',')
-            q[path].add_fields(*fields)
+    resp = requests.get(args.uri, params={'query': q}).json()
 
-    resp = make_request(args.url, q)
-
-    print(resp.text)
+    if 'errors' in resp:
+        for err in resp['errors']:
+            print(err['message'])
+        sys.exit(1)
+    else:
+        print(resp)
