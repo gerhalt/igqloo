@@ -24,6 +24,7 @@ class Node(object):
         node = self
         for segment in name.split('.'):
             if segment not in node.children:
+                # TODO: Check for aliases in children before creating a new node
                 node.children[segment] = Node(name=segment, root=False)
             node = node.children[segment]
 
@@ -43,7 +44,6 @@ class Node(object):
         if self.alias is not None:
             query.append(self.alias + ':')
 
-        # TODO: Support named queries
         if self.name is not None:
             query.append(str(self.name))
 
@@ -97,14 +97,11 @@ def parse_fields(q, fields):
                 quoted = False
 
             if c == '.' and not quoted or idx == len(f) - 1:
-                print(segment_chunks)
-
                 parent_node = current_node
                 for chunk in segment_chunks:
                     if chunk[0] == '.':
                         current_node = current_node[chunk[1:]]
                     elif chunk[0] == ',':
-                        print(f'adding {chunk[1:]}')
                         current_node = parent_node[chunk[1:]]
                     elif chunk[0] == '(':
                         chunk = chunk[1:-1]
@@ -117,6 +114,8 @@ def parse_fields(q, fields):
                         else:
                             k,v = chunk.split(':', 1)
                             current_node.add_filters(**{k:v})
+                    else:
+                        current_node = current_node[chunk]
 
                 segment_chunks = []
 
@@ -141,13 +140,16 @@ if __name__ == '__main__':
 
     q = Node(root=True)
     q = parse_fields(q, args.fields)
-    print(q)
 
-    resp = requests.get(args.uri, params={'query': q}).json()
+    if args.verbose:
+        print(q)
 
-    if 'errors' in resp:
-        for err in resp['errors']:
+    resp = requests.get(args.uri, params={'query': q})
+    data = resp.json()
+
+    if 'errors' in data:
+        for err in data['errors']:
             print(err['message'])
         sys.exit(1)
     else:
-        print(resp)
+        print(resp.text)
