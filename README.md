@@ -13,7 +13,7 @@ igqloo <graphql_uri> customer(name:"gerhalt@gmail.com").id,firstName,lastName
 
 Under the surface, generates a GraphQL query that looks like:
 
-```json
+```gql
 query {
     customer(name:"gerhalt@gmail.com") {
         id, firstName, lastName
