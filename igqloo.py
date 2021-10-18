@@ -71,8 +71,6 @@ class Node(object):
 
 def parse_fields(q, fields):
     """Parse out a list of fields, adding them to the query.
-
-    Split on '.', then ',', then '()'
     """
     for f in fields:
         current_node = q
@@ -122,7 +120,7 @@ def parse_fields(q, fields):
     return q
 
 
-if __name__ == '__main__':
+def main():
     parser = ArgumentParser(
             description='Interact with a GQL query.')
     parser.add_argument(
@@ -153,3 +151,7 @@ if __name__ == '__main__':
         sys.exit(1)
     else:
         print(resp.text)
+
+
+if __name__ == '__main__':
+    test()
